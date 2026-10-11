@@ -22,6 +22,13 @@ in the browser's localStorage on the device you practice on. AI tools
 were used to build it (Anthropic Claude, with review passes by other
 models); the app itself contains no AI and makes no network requests.
 
+The live link above still needs internet to load the first time. Save
+`index.html` to your device (PC, phone, or tablet) and it keeps working
+with no internet at all, indefinitely: see
+[about.html's "Using it without internet"](about.html#using-it-without-internet)
+for exact steps and how this differs from a normal website or an
+installed app.
+
 ## Features
 
 - **Grammar reference**: 19 collapsible sections: alphabet, vowel harmony,
