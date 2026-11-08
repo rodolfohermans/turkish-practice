@@ -735,7 +735,7 @@ level yourself on the Help tab.</p>
 <section class="tab" id="tab-drill">
   <div class="controls">
     <select id="drill-topic" aria-label="Drill topic"><option value="all">All topics</option></select>
-    <select id="drill-mode" aria-label="Practice mode" title="Auto (recommended): new drills are shown first, then checked, recalled and checked again - the only mode that takes drills all the way to mastered. Build tiles and choices are extra practice formats.">
+    <select id="drill-mode" aria-label="Practice mode" title="Auto (recommended): new drills are shown first, then checked, recalled and checked again. Build tiles also builds mastery; choices practises recognition only.">
       <option value="reveal">Mode: auto (recommended)</option>
       <option value="build">Mode: build tiles</option>
       <option value="choices">Mode: choices</option>
@@ -783,7 +783,7 @@ level yourself on the Help tab.</p>
       <option value="tr2en">Turkish → English</option>
       <option value="en2tr">English → Turkish</option>
     </select>
-    <select id="vocab-mode" aria-label="Practice mode" title="Auto (recommended): new words are shown first, then checked, recalled and checked again - the only mode that takes words all the way to mastered. Choices, fill the blank and timed are extra practice formats.">
+    <select id="vocab-mode" aria-label="Practice mode" title="Auto (recommended): new words are shown first, then checked, recalled and checked again. Fill the blank also builds mastery; choices and timed only count toward unlocking levels.">
       <option value="reveal">Mode: auto (recommended)</option>
       <option value="choices">Mode: choices</option>
       <option value="cloze">Mode: fill the blank</option>
@@ -864,7 +864,7 @@ level yourself on the Help tab.</p>
       <p>Content unlocks level by level as you practice: the next level opens
          when about 60% of the current level's words (in the word set you have
          chosen) are ones you have shown you know: a correct check in auto
-         mode, or two correct picks in choices or matching. This is a default
+         mode, or two correct picks in choices mode. This is a default
          pace, not a wall. Lock or unlock any
          level above, in any order; reference sections are always readable.</p>
     </div>
@@ -1783,6 +1783,7 @@ function makeDeck(cfg){
   const probeNext={};   /* key -> mode to force on that card's next presentation */
   let celebrated=false;
   let throttled=0;   /* last Smart round's backlog when it cut the new-item quota */
+  let cadencePending=false;   /* this round qualified for the exclusion cadence */
   const rs={answered:0,right:0,wrong:0,introduced:0,checks:0,checksOk:0};   /* this round's story */
   const presented={};    /* keys shown as a study presentation this round */
   let presenting=false;
@@ -1877,7 +1878,7 @@ function makeDeck(cfg){
       if(rs.answered>0){
         sum='You answered '+rs.answered+(rs.answered===1?' card':' cards')
            +': '+rs.right+' right · '+rs.wrong+' missed';
-        if(rs.introduced>0)sum+=' · '+rs.introduced+' new '+(rs.introduced===1?'word':'words')+' met';
+        if(rs.introduced>0)sum+=' · '+rs.introduced+' new '+(cfg.tab==='drill'?(rs.introduced===1?'drill':'drills'):(rs.introduced===1?'word':'words'))+' met';
         /* objective checks are the calibration signal for self-grading:
            feedback is what shrinks overconfidence (Leon et al. 2023, abstract) */
         if(rs.checks>0)sum+=' · checks passed: '+rs.checksOk+' of '+rs.checks;
@@ -1953,9 +1954,20 @@ function makeDeck(cfg){
        and the link is what the learner needs. A word already known in the
        other direction is not new (approximate associative symmetry; Lindsey
        et al. 2014 trained one direction for that reason) and is not shown. */
-    if(smartMode&&curEm!=='timed'&&curEm!=='excl'&&!verifying&&!c.excl&&!c.num
+    /* every round (Shuffle and Weak-first too: a self-grade on a never-seen
+       word would otherwise earn its first credit on the honor system), but
+       never on a forced exclusion probe - that card was just met on the
+       matching board and its probe IS the check */
+    if(curEm!=='timed'&&curEm!=='excl'&&!verifying&&!c.excl&&!c.num
+       &&!probeNext[cfg.keyOf(c)]
        &&!getRec(cfg.keyOf(c),curDir)&&!knownElsewhere(c)&&!presented[cfg.keyOf(c)+curDir]){
       presented[cfg.keyOf(c)+curDir]=1;
+      /* cloze fixes the record direction (EN->TR): show the open card that way
+         too, or the chip says English -> Türkçe over a Turkish front */
+      if(curDir!==dir&&dir){
+        frontEl.innerHTML=cfg.frontOf(c,curDir);answerEl.innerHTML=cfg.answerOf(c,curDir);
+        frontEl.setAttribute('lang',curDir==='tr2en'?'tr':'en');answerEl.setAttribute('lang',curDir==='tr2en'?'en':'tr');
+      }
       rs.introduced++;
       presenting=true;
       card.classList.add('revealed');
@@ -2016,6 +2028,7 @@ function makeDeck(cfg){
      objectiveCorrect retires even when the grade letter is 'r'. */
   function record(g,opts){
     if(!deck[i])return;
+    if(cadencePending){cadencePending=false;UI.exclN=(Number(UI.exclN)||0)+1;saveUI();}
     rs.answered++;
     if(g==='d')rs.wrong++;else rs.right++;
     const key=cfg.keyOf(deck[i]);
@@ -2118,11 +2131,11 @@ function makeDeck(cfg){
     else{i=u.iPrev;}
     setUndo(null);render();
   }
-  function reset(items,doShuffle){deck=items.slice();if(doShuffle)shuffle(deck);modeTag='';smartMode=false;gen++;setUndo(null);answeredLock=null;pass=1;celebrated=false;rs.answered=rs.right=rs.wrong=rs.introduced=rs.checks=rs.checksOk=0;for(const k in probeNext)delete probeNext[k];for(const k in presented)delete presented[k];i=0;render();}
+  function reset(items,doShuffle){throttled=0;cadencePending=false;deck=items.slice();if(doShuffle)shuffle(deck);modeTag='';smartMode=false;gen++;setUndo(null);answeredLock=null;pass=1;celebrated=false;rs.answered=rs.right=rs.wrong=rs.introduced=rs.checks=rs.checksOk=0;for(const k in probeNext)delete probeNext[k];for(const k in presented)delete presented[k];i=0;render();}
   function weakFirst(items){
     const a=shuffle(items.slice());
     a.sort((x,y)=>weakScore(cfg.keyOf(x),dirFor(x))-weakScore(cfg.keyOf(y),dirFor(y)));
-    deck=a;modeTag='weak first';smartMode=false;gen++;setUndo(null);answeredLock=null;pass=1;celebrated=false;rs.answered=rs.right=rs.wrong=rs.introduced=rs.checks=rs.checksOk=0;for(const k in probeNext)delete probeNext[k];for(const k in presented)delete presented[k];i=0;render();
+    throttled=0;cadencePending=false;deck=a;modeTag='weak first';smartMode=false;gen++;setUndo(null);answeredLock=null;pass=1;celebrated=false;rs.answered=rs.right=rs.wrong=rs.introduced=rs.checks=rs.checksOk=0;for(const k in probeNext)delete probeNext[k];for(const k in presented)delete presented[k];i=0;render();
   }
   /* Smart queue: misses first, then the productive edge interleaved (2:1) with a small
      dose of new cards in the books' own teaching order, then a few mastered reviews. */
@@ -2176,11 +2189,13 @@ function makeDeck(cfg){
     deck=relearn.concat(mix,review);
     /* exclusion introduction (PLAN 5d): the round's first NEW card arrives as
        a learn-by-exclusion matching screen when 4 suitable known pairs exist */
+    cadencePending=false;
     if(cfg.exclusionSet&&fresh.length){
-      const knowns=cfg.exclusionSet(fresh[0]);
-      if(knowns){
+      const ex=cfg.exclusionSet(fresh[0]);
+      if(ex){
+        cadencePending=true;
         const at=deck.indexOf(fresh[0]);
-        if(at>=0)deck[at]={excl:{card:fresh[0],knowns:knowns,done:false}};
+        if(ex.use&&at>=0)deck[at]={excl:{card:fresh[0],knowns:ex.knowns,done:false}};
       }
     }
     if(!deck.length)deck=shuffle(items.slice());
@@ -2566,13 +2581,13 @@ const vocabDeck=makeDeck({
     }
     if(out.length<4)return null;
     /* ~1 in 3 QUALIFYING rounds introduces by exclusion (PLAN 5d). Only
-       rounds that can actually build a board advance the cadence - rounds
-       without 4 suitable knowns (fresh users, thin pools) must not shift it.
-       The counter persists in UI state: an in-memory counter reset on every
-       reload, so reloading before each round gave exclusion every time. */
-    UI.exclN=(Number(UI.exclN)||0)+1;saveUI();   /* a corrupt string must add, not concatenate */
-    if((UI.exclN-1)%3!==0)return null;
-    return out;
+       rounds that can actually build a board count - rounds without 4
+       suitable knowns (fresh users, thin pools) must not shift the cadence.
+       The counter persists in UI state (an in-memory one reset on reload gave
+       exclusion every time) and advances only when the round is PLAYED (first
+       answer, see makeDeck): rounds built and discarded unseen - page load,
+       Start here, level or set changes - must not shift it either. */
+    return {knowns:out,use:(Number(UI.exclN)||0)%3===0};
   },
   forceMode:function(c){return c.excl?'excl':null;},
   /* vocab intro order: baked index `o` = frequency-weighted book teaching order with
@@ -2581,7 +2596,8 @@ const vocabDeck=makeDeck({
   dirOf:vocabDirOf,   /* fixed selector, or each card's weaker direction in mixed */
   knownElsewhere:function(c){
     const e=STATS[vocabKey(c.excl?c.excl.card:c)];
-    return !!(e&&((e.tr2en&&e.tr2en.s>0)||(e.en2tr&&e.en2tr.s>0)));
+    const ok=r=>!!r&&(r.s>0||(r.r||0)>0);   /* strong, or a correct pick */
+    return !!(e&&(ok(e.tr2en)||ok(e.en2tr)));
   },
   modes:['choices','cloze','timed'],
   modeDir:{cloze:'en2tr',excl:'tr2en'},
@@ -2603,7 +2619,7 @@ const vocabDeck=makeDeck({
        mastery streak - say so, or a choices-only learner sees the same words
        forever with no explanation (user report) */
     if(document.getElementById('vocab-mode').value==='choices'&&solid<items.length)
-      return 'Choices answers count toward unlocking levels, but words are only mastered by recalling them · switch Mode to auto to finish these words.';
+      return 'Choices answers count toward unlocking levels but never master a word · switch Mode to auto to finish these words.';
     if(learn>0)return learn+(learn===1?' word needs':' words need')+' relearning · Smart serves them first.';
     if(unseen>0){
       const th=vocabDeck.throttled();
@@ -2993,7 +3009,7 @@ document.getElementById('vocab-mode').addEventListener('change',function(e){
   vocabDeck.setMode(now);
   /* only timed changes the card POOL; other switches keep the deck (and the
      answered-lock protecting against re-grading the same exposure, F6) */
-  if(was==='timed'||now==='timed')vocabDeck.reset(vocabItems(),true);
+  if(was==='timed'||now==='timed')vocabDeck.smart(vocabItems());
 });
 vocabDeck.reset(vocabItems(),true);
 if(UI.vocabMode&&UI.vocabMode!=='reveal'&&MODE_GRADE[UI.vocabMode]){
@@ -3169,8 +3185,8 @@ document.addEventListener('click',e=>{
     }
     maybeUnlock();          /* restored history may clear level criteria */
     refreshLockUI();
-    drillDeck.reset(drillItems(),true);
-    vocabDeck.reset(vocabItems(),true);
+    drillDeck.smart(drillItems());
+    vocabDeck.smart(vocabItems());
     msg.textContent='Imported: '+took+' records merged.';
   });
 })();
