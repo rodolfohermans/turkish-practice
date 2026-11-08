@@ -1108,12 +1108,12 @@ const DRILLS = [
   {t:"Verb as object", q:"I want to sleep", a:"Uyumak istiyorum.", x:"uyumak (infinitive) + iste- (istemek) · -iyor (present continuous) · -um (I)", b:["Uyumak","istiyorum"]},
   {t:"Verb as object", q:"We'll try to move", a:"Taşınmayı deneyeceğiz.", x:"taşın- · -ma (doing) · -yı (accusative: denemek takes -meyi) + dene- · -yeceğ (future; buffer y, k→ğ) · -iz (we)", b:["Taşınmayı","deneyeceğiz"]},
   {t:"-ken", q:"While I was studying, my mother called", a:"Ders çalışırken annem aradı.", x:"ders çalış- (ders çalışmak: to study) · -ır (aorist) · -ken (while) + annem aradı (my mother called)", b:["Ders","çalışırken","annem","aradı"]},
-  {t:"Word order", q:"I don't like this (hoşlanmak)", a:"Bundan hoşlanmıyorum.", x:"bu · -ndan (from this: hoşlanmak takes -dan) + hoşlan- · -mı (negative) · -yor · -um (I)", b:["Bundan","hoşlanmıyorum"]},
+  {t:"Word order", lv:3, q:"I don't like this (hoşlanmak)", a:"Bundan hoşlanmıyorum.", x:"bu · -ndan (from this: hoşlanmak takes -dan) + hoşlan- · -mı (negative) · -yor · -um (I)", b:["Bundan","hoşlanmıyorum"]},
   {t:"Word order", q:"except Monday", a:"pazartesi hariç", x:"pazartesi (Monday) + hariç (except): hariç comes AFTER the noun", b:["pazartesi","hariç"]},
-  {t:"Word order", q:"I was glad about that (sevinmek)", a:"Buna sevindim.", x:"bu · -na (to that: sevinmek takes the dative) + sevin- · -di (past) · -m (I)", b:["Buna","sevindim"]},
-  {t:"Numbers", q:"25", a:"yirmi beş", x:"yirmi (20) + beş (5): chain the parts", b:["yirmi","beş"]},
+  {t:"Word order", lv:5, q:"I was glad about that (sevinmek)", a:"Buna sevindim.", x:"bu · -na (to that: sevinmek takes the dative) + sevin- · -di (past) · -m (I)", b:["Buna","sevindim"]},
+  {t:"Numbers", lv:2, q:"25", a:"yirmi beş", x:"yirmi (20) + beş (5): chain the parts", b:["yirmi","beş"]},
   {t:"Numbers", q:"40 · 60 · 70", a:"kırk · altmış · yetmiş", x:""},
-  {t:"Numbers", q:"110", a:"yüz on", x:"yüz (100) + on (10)", b:["yüz","on"]},
+  {t:"Numbers", lv:2, q:"110", a:"yüz on", x:"yüz (100) + on (10)", b:["yüz","on"]},
   {t:"Telling the time", q:"What time is it?", a:"Saat kaç?", x:"saat (hour) + kaç (how many); 'at what time' = Saat kaçta?", b:["Saat","kaç"]},
   {t:"Telling the time", q:"7:30", a:"(saat) yedi buçuk", x:""},
   {t:"Telling the time", q:"quarter past seven", a:"yediyi çeyrek geçiyor", x:"yedi · -yi (accusative) + çeyrek (quarter) + geç- (geçmek) · -iyor: it is passing seven by a quarter", b:["yediyi","çeyrek","geçiyor"]},
@@ -1502,6 +1502,13 @@ function numItems(){
   });
 }
 function levelOfVocab(c){for(let ix=0;ix<LEVELS.length;ix++){if(c.o<LEVELS[ix].vmax)return ix+1;}return LEVELS.length;}
+/* a drill's level is its topic's, unless the drill itself needs grammar from a
+   later level (lv): a level-1 "word order" item built on -iyor or -di asks for
+   morphology the learner has not met, and teaching structures ahead of the
+   learner's stage is at best contested (Pienemann's teachability hypothesis;
+   against: Spada & Lightbown 1999). Number compounds wait for the primitives,
+   matching the staged number curriculum below. */
+function levelOfDrill(d){return d.lv||levelOfTopic(d.t);}
 function levelOfTopic(tp){
   if(tp===NUM_TOPIC)return 1;   /* first templates are level 1 */
   return TOPIC_LEVEL[tp]||LEVELS.length;
@@ -1550,8 +1557,17 @@ function levelCards(level){
   const lo=level>1?LEVELS[level-2].vmax:0, hi=LEVELS[level-1].vmax;
   return VOCAB.filter(c=>c.o>=lo&&c.o<hi);
 }
+/* the word set chosen on the Vocabulary tab: progress is measured on the words
+   the learner can actually practise, or a narrow set (Core: 33% of level 1)
+   could never reach the unlock threshold */
+function inActiveSet(v){
+  const el=document.getElementById('vocab-set'), s=el?el.value:'everything';
+  if(s==='everything')return true;
+  if(s==='all')return v.k!=='book';
+  return v.k===s;
+}
 function levelProgressPct(level){
-  const cards=levelCards(level);
+  const cards=levelCards(level).filter(inActiveSet);
   let ok=0;
   cards.forEach(c=>{
     const k=vocabKey(c);
@@ -1579,7 +1595,7 @@ function inPlayVocab(c){
   return unlocked(lv)||!!STATS[vocabKey(c)];
 }
 function inPlayDrill(d){
-  const lv=levelOfTopic(d.t);
+  const lv=levelOfDrill(d);
   if(shutByUser(lv))return false;
   return unlocked(lv)||!!STATS['drill|'+d.q];
 }
@@ -1651,7 +1667,19 @@ function refreshLockUI(){
       b.textContent=open_?'Lock':'Unlock';
       b.title=open_?'Take this level out of play':'Put this level in play now';
       b.addEventListener('click',()=>{
-        if(open_){LV.ov[n]='shut';if(n>LV.u)delete LV.ov[n];}
+        if(open_){
+          const before=LV.ov[n];
+          LV.ov[n]='shut';
+          /* never lock the learner out of everything: an empty pile on both
+             practice tabs reads as a broken app, not as a choice */
+          if(!VOCAB.some(inPlayVocab)){
+            if(before===undefined)delete LV.ov[n];else LV.ov[n]=before;
+            status.textContent='Locking level '+n+' would leave no words to practise. Unlock another level first.';
+            announce(status.textContent);
+            return;
+          }
+          if(n>LV.u)delete LV.ov[n];
+        }
         else{if(n<=LV.u)delete LV.ov[n];else LV.ov[n]='open';}
         saveLevels();refreshLockUI();rebuildDecks();
       });
@@ -2112,6 +2140,10 @@ const drillDeck=makeDeck({
   /* curriculum order; generated skill cards come after all real drills,
      ordered by their level (A8: no DRILLS.indexOf fallthrough) */
   introCmp:function(a,b){
+    /* curriculum level first: with several levels open (Unlock everything,
+       levels off) file order would serve level-7 topics before level-1 ones */
+    const la=a.num?a.num.lvl:levelOfDrill(a), lb=b.num?b.num.lvl:levelOfDrill(b);
+    if(la!==lb)return la-lb;
     const ia=a.num?DRILLS.length+a.num.lvl:DRILLS.indexOf(a);
     const ib=b.num?DRILLS.length+b.num.lvl:DRILLS.indexOf(b);
     return ia-ib;
@@ -2888,7 +2920,11 @@ document.getElementById('lvl-unlock-all').addEventListener('click',()=>{
 });
 document.getElementById('lvl-off').addEventListener('change',e=>{
   LV.off=!!e.target.checked;
-  saveLevels();refreshLockUI();rebuildDecks();
+  saveLevels();
+  /* practice done with levels off still counts: catch the ceiling up now,
+     not on the next graded answer */
+  if(!LV.off)maybeUnlock();
+  refreshLockUI();rebuildDecks();
 });
 /* the About card count always reflects the live deck (no more stale 485s) */
 (function(){const el=document.getElementById('about-vocab-n');if(el)el.textContent=VOCAB.length;})();
@@ -2942,6 +2978,7 @@ document.addEventListener('click',e=>{
     const out={};
     Object.keys(STATS).forEach(function(k){out[k]=STATS[k];});
     out.__days=DAYS.d;   /* practice-days history rides the backup */
+    out.__levels={u:LV.u,ov:LV.ov,off:!!LV.off};   /* and the level settings */
     const json=JSON.stringify(out);
     box.value=json;
     msg.textContent='Exported.';
@@ -2960,6 +2997,9 @@ document.addEventListener('click',e=>{
     const daysIn=(data.__days&&typeof data.__days==='object'&&!Array.isArray(data.__days))
       ?data.__days:null;
     delete data.__days;
+    const lvIn=(data.__levels&&typeof data.__levels==='object'&&!Array.isArray(data.__levels))
+      ?data.__levels:null;
+    delete data.__levels;
     for(const key in data){
       const e=data[key];
       if(!e||typeof e!=='object'){msg.textContent='Not a valid backup.';return;}
@@ -3003,6 +3043,18 @@ document.addEventListener('click',e=>{
       });
     });
     saveStats();
+    /* level settings: the ceiling never drops; a backup's open/lock choices
+       fill in only where this browser has made none of its own */
+    if(lvIn){
+      const u=Math.floor(Number(lvIn.u));
+      if(isFinite(u)&&u>LV.u)LV.u=Math.min(u,LEVELS.length);
+      if(lvIn.ov&&typeof lvIn.ov==='object')Object.keys(lvIn.ov).forEach(function(n){
+        const lvl=Number(n);
+        if(Number.isInteger(lvl)&&lvl>=1&&lvl<=LEVELS.length&&!LV.ov[lvl]
+           &&(lvIn.ov[n]==='open'||lvIn.ov[n]==='shut'))LV.ov[lvl]=lvIn.ov[n];
+      });
+      saveLevels();
+    }
     maybeUnlock();          /* restored history may clear level criteria */
     refreshLockUI();
     drillDeck.reset(drillItems(),true);
