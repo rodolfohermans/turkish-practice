@@ -541,8 +541,9 @@ level yourself on the Help tab.</p>
     <p><b>Use:</b> things you didn't witness yourself: hearsay, inference, surprise:
        <span class="tr">Ali evlenmiş!</span> <span class="en">(I hear / apparently) Ali got married!</span></p>
     <p><b>Build it:</b> stem + <span class="tr">mış/miş/muş/müş</span> + person (4-way harmony).
-       Same person endings as -di: <span class="tr">gelmişim, gelmişsin, gelmiş, gelmişiz,
-       gelmişsiniz, gelmişler</span>.</p>
+       Person endings are the "to be" ones (as in <span class="tr">mutluyum, mutlusun</span>),
+       not the -di ones: <span class="tr">gelmişim, gelmişsin, gelmiş, gelmişiz,
+       gelmişsiniz, gelmişler</span> (compare <span class="tr">geldim, geldik</span>).</p>
     <p><b>Negative:</b> <span class="tr">gelmemiş</span>. <b>Question:</b> <span class="tr">Gelmiş mi?</span></p>
     <p>For now you mainly need to <i>recognise</i> it in stories and news; use -di when you
        talk about your own day.</p>
@@ -1132,6 +1133,10 @@ document.querySelectorAll('nav button').forEach(b=>{
     b.classList.add('active');
     document.getElementById('tab-'+b.dataset.tab).classList.add('active');
     if(b.dataset.tab==='progress')renderProgress();
+    /* a timed card's countdown was held while away: restart it on return
+       (setMode bumps the deck generation, dropping any stale timer) */
+    if(b.dataset.tab==='vocab'&&document.getElementById('vocab-mode').value==='timed')
+      vocabDeck.setMode('timed');
   });
 });
 
@@ -1241,7 +1246,9 @@ function saveDays(){
   try{localStorage.setItem(DAYS_KEY,JSON.stringify(DAYS));}
   catch(e){const w=document.getElementById('storage-warn');if(w)w.hidden=false;}
 }
-function tallyDay(){const t=dayStamp(Date.now());DAYS.d[t]=(DAYS.d[t]||0)+1;saveDays();}
+function tallyDay(){const t=dayStamp(Date.now());DAYS.d[t]=(DAYS.d[t]||0)+1;saveDays();return t;}
+/* undo of a grade takes its practice-day answer back too */
+function untallyDay(t){if(!t||!DAYS.d[t])return;if(DAYS.d[t]>1)DAYS.d[t]--;else delete DAYS.d[t];saveDays();}
 function recordGrade(key,dir,g){
   const e=STATS[key]||(STATS[key]={});
   const s=e[dir]||(e[dir]={s:0,g:0,d:0,l:'',k:0,ts:0,sd:0});
@@ -1260,8 +1267,9 @@ function recordGrade(key,dir,g){
   }
   s.ts=now;
   saveStats();
-  tallyDay();
+  const day=tallyDay();
   if(key.indexOf('vocab|')===0)maybeUnlock();
+  return day;
 }
 /* a guess means the word is NOT yet known: it must rank weaker than an unseen card,
    otherwise chronically guessed words sort behind fresh ones and never get practice */
@@ -1727,8 +1735,15 @@ function makeDeck(cfg){
   const card=document.getElementById(cfg.card);
   const gradesEl=document.getElementById(cfg.grades);
   const revealBtn=document.getElementById(cfg.revealBtn);
-  /* the direction a card will be practiced in right now (drills: 'one') */
-  const dirFor=c=>cfg.dirOf?cfg.dirOf(c):'one';
+  /* the direction a card's answer will be RECORDED in right now (drills: 'one').
+     Must match render(): modes with a fixed record direction (cloze -> en2tr)
+     override the selector, or scheduling reads one record and grading writes
+     another - cards mastered via cloze would stay 'new' to Smart forever. */
+  const dirFor=c=>{
+    const d=cfg.dirOf?cfg.dirOf(c):'one';
+    const em=calcMode(c);
+    return (cfg.modeDir&&cfg.modeDir[em])?cfg.modeDir[em]:d;
+  };
   function render(){
     pendingRepaint=false;
     const c=deck[i];
@@ -1899,7 +1914,7 @@ function makeDeck(cfg){
     const key=cfg.keyOf(deck[i]);
     const prev=getRec(key,curDir);
     const snapshot=prev?JSON.parse(JSON.stringify(prev)):null;
-    recordGrade(key,curDir,g);
+    const day=recordGrade(key,curDir,g);
     /* a success retires the card from the CURRENT pile in every deck mode -
        like setting a known card aside from a physical stack; misses stay in
        the pile. This is what makes progress visible outside Smart too. */
@@ -1907,10 +1922,10 @@ function makeDeck(cfg){
     if(retire){
       const removed=deck[i], at=i;
       deck.splice(i,1);if(i>=deck.length)i=0;
-      setUndo({key:key,dir:curDir,prev:snapshot,removed:removed,at:at,g:g});
+      setUndo({key:key,dir:curDir,prev:snapshot,removed:removed,at:at,g:g,day:day});
       return 'retired';
     }
-    setUndo({key:key,dir:curDir,prev:snapshot,iPrev:i,g:g});
+    setUndo({key:key,dir:curDir,prev:snapshot,iPrev:i,g:g,day:day});
     return 'kept';
   }
   function advanceAfter(res){
@@ -1980,6 +1995,7 @@ function makeDeck(cfg){
     if(u.prev){STATS[u.key][u.dir]=u.prev;}
     else if(STATS[u.key]){delete STATS[u.key][u.dir];if(!Object.keys(STATS[u.key]).length)delete STATS[u.key];}
     saveStats();
+    untallyDay(u.day);   /* or the Progress tab's activity counts drift up */
     /* the debrief counters and any forced probe roll back with the grade */
     if(u.g){rs.answered--;if(u.g==='d')rs.wrong--;else rs.right--;}
     if(u.probe)probeNext[u.probe.key]=u.probe.mode;
@@ -2187,7 +2203,8 @@ function makeChoices(containerId, cardId){
   }
   function pick(n){
     if(!state||state.done)return;
-    const el=box.children[n];
+    /* answer buttons only: timed rounds put a countdown bar first in the box */
+    const el=box.querySelectorAll(':scope > button')[n];
     if(el)el.click();
   }
   return {clear:clear,show:show,pick:pick};
@@ -2355,6 +2372,22 @@ if(UI.drillMode&&UI.drillMode!=='reveal'&&MODE_GRADE[UI.drillMode]){
 /* vocab */
 const dirSel=document.getElementById('vocab-dir');
 const setSel=document.getElementById('vocab-set');
+/* mixed: deliberately practice each card's WEAKER direction - production practice
+   transfers to recognition far better than the reverse (receptive/productive
+   asymmetry in L2 vocabulary; Webb 2005; Griffin & Harley 1996). On a tie the
+   direction is random but stable for the session, so Prev doesn't re-roll it.
+   Top-level so the timed-round pool filter can ask the same question. */
+function vocabDirOf(c){
+  if(c.excl)c=c.excl.card;   /* the wrapper has no w/m of its own */
+  if(dirSel.value!=='mixed') return dirSel.value;
+  const key=vocabKey(c);
+  const wt=weakScore(key,'tr2en'), we=weakScore(key,'en2tr');
+  if(wt<we) return 'tr2en';
+  if(we<wt) return 'en2tr';
+  const k=c.w+'|'+c.m;
+  if(!(k in MIX_DIR)) MIX_DIR[k]=Math.random()<0.5?'tr2en':'en2tr';
+  return MIX_DIR[k];
+}
 const vocabDeck=makeDeck({
   tab:'vocab', card:'vocab-card', chip:'vocab-chip', stat:'vocab-stat', front:'vocab-front',
   answer:'vocab-answer', extra:'vocab-extra', count:'vocab-count', grades:'vocab-grades',
@@ -2372,7 +2405,8 @@ const vocabDeck=makeDeck({
     const words={};words[lowerTr(newCard.w)]=1;
     const seenLv={};
     const pool=shuffle(VOCAB.filter(function(v){
-      if(v===newCard||!STATS[vocabKey(v)])return false;
+      /* inPlayVocab: a level the learner explicitly Locked stays out of play here too */
+      if(v===newCard||!STATS[vocabKey(v)]||!inPlayVocab(v))return false;
       const st=cardState(vocabKey(v),'tr2en');
       return st==='edge'||st==='mastered';
     }));
@@ -2400,21 +2434,7 @@ const vocabDeck=makeDeck({
   /* vocab intro order: baked index `o` = frequency-weighted book teaching order with
      a common-sense boost for core daily words (see add_ranks.py / rerank pass) */
   introCmp:(a,b)=>(a.o!=null?a.o:1e9)-(b.o!=null?b.o:1e9),
-  /* mixed: deliberately practice each card's WEAKER direction - production practice
-     transfers to recognition far better than the reverse (receptive/productive
-     asymmetry in L2 vocabulary; Webb 2005; Griffin & Harley 1996). On a tie the
-     direction is random but stable for the session, so Prev doesn't re-roll it. */
-  dirOf:c=>{
-    if(c.excl)c=c.excl.card;   /* the wrapper has no w/m of its own */
-    if(dirSel.value!=='mixed') return dirSel.value;
-    const key=vocabKey(c);
-    const wt=weakScore(key,'tr2en'), we=weakScore(key,'en2tr');
-    if(wt<we) return 'tr2en';
-    if(we<wt) return 'en2tr';
-    const k=c.w+'|'+c.m;
-    if(!(k in MIX_DIR)) MIX_DIR[k]=Math.random()<0.5?'tr2en':'en2tr';
-    return MIX_DIR[k];
-  },
+  dirOf:vocabDirOf,   /* fixed selector, or each card's weaker direction in mixed */
   modes:['choices','cloze','timed'],
   modeDir:{cloze:'en2tr',excl:'tr2en'},
   nextStep:function(){
@@ -2480,7 +2500,11 @@ const vocabDeck=makeDeck({
       bar.appendChild(document.createElement('div'));
       box.insertBefore(bar,box.firstChild);
       const myGen=api.gen();
-      setTimeout(function(){if(api.gen()===myGen)api.next();},6000);
+      /* never skip cards the learner can't see: returning to the tab
+         re-renders this card with a fresh countdown (tab handler) */
+      setTimeout(function(){
+        if(api.gen()===myGen&&document.getElementById('tab-vocab').classList.contains('active'))api.next();
+      },6000);
       return;
     }else if(em==='cloze'){
       document.getElementById('vocab-reveal').style.display='none';
@@ -2791,11 +2815,11 @@ function vocabItems(){
      unknown words just trains guessing (Nation's fluency strand) */
   const modeSel=document.getElementById('vocab-mode');
   if(modeSel&&modeSel.value==='timed'){
+    /* known in the direction the card will actually be SHOWN: knowing a word
+       TR->EN says nothing about producing it in an EN->TR timed round */
     pool=pool.filter(function(v){
-      const k=vocabKey(v);
-      const ra=getRec(k,'tr2en'), rb=getRec(k,'en2tr');
-      const good=function(r,st){return r&&r.s>0&&(st==='edge'||st==='mastered');};
-      return good(ra,cardState(k,'tr2en'))||good(rb,cardState(k,'en2tr'));
+      const k=vocabKey(v), d=vocabDirOf(v), r=getRec(k,d), st=cardState(k,d);
+      return !!r&&r.s>0&&(st==='edge'||st==='mastered');
     });
   }
   return pool;
