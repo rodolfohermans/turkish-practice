@@ -859,8 +859,10 @@ level yourself on the Help tab.</p>
         <label><input type="checkbox" id="lvl-off"> Practice without levels</label>
       </p>
       <p>Content unlocks level by level as you practice: the next level opens
-         when about 60% of the current level's words are ones you answer
-         correctly. This is a default pace, not a wall. Lock or unlock any
+         when about 60% of the current level's words (in the word set you have
+         chosen) are ones you have shown you know: a correct check in reveal
+         mode, or two correct picks in choices or matching. This is a default
+         pace, not a wall. Lock or unlock any
          level above, in any order; reference sections are always readable.</p>
     </div>
   </details>
@@ -1019,7 +1021,23 @@ level yourself on the Help tab.</p>
       <p><b>Introduction rate:</b> about 10 new items per session, with older
          material mixed back in (cumulative practice improves retention;
          Maie et al. 2025, <i>TESOL Quarterly</i>). Hence 10 new + 5 review
-         per round.</p>
+         per round. New words compete with review for your time (Lindsey et
+         al. 2014, <i>Psychological Science</i>), so fewer come in while many
+         words are due, down to 2 per round; the round's counter says so.</p>
+      <p><b>Study first, then test:</b> a new word is shown open before it is
+         ever tested, in every mode except timed. Guessing an unfamiliar
+         word's meaning before seeing it helps you recognise it later but not
+         link it to its meaning (Seabrooke et al. 2021, <i>Memory &amp;
+         Cognition</i>).</p>
+      <p><b>Checks, not only self-grades:</b> in reveal mode a word's first
+         strong answer and its mastery-completing answer are objective checks
+         (fill the blank or pick the answer). People tend to give themselves
+         credit for answers that were wrong, and seeing the answer only
+         partly fixes this (Lipko et al. 2009; Grimaldi &amp; Karpicke 2014).
+         The round summary shows how many checks you passed.</p>
+      <p><b>What comes back first:</b> words that can still advance today,
+         least recently seen first, so a word one step from mastery is not left
+         waiting behind newer ones.</p>
       <p><b>Working the edge:</b> time goes to material just beyond current
          mastery (misses and half-known words) rather than what is already
          easy or still far too hard (zone of proximal development; desirable
@@ -1571,10 +1589,14 @@ function levelProgressPct(level){
   let ok=0;
   cards.forEach(c=>{
     const k=vocabKey(c);
-    /* a lucky MC guess ('r' only) must not unlock levels: require at least
-       one strong answer in the counted direction */
+    /* a word counts with a strong answer (in reveal mode its first one is now
+       an objective check), or with TWO objective recognitions: choices and
+       matching practice is real evidence of meaning recognition (Laufer &
+       Goldstein 2004 hierarchy, abstract) and used to count for nothing. Two,
+       not one, so a lucky 1-in-4 guess cannot count (a miss also drops the
+       card to 'learning'). Recognition still never builds the mastery streak. */
     const ra=getRec(k,'tr2en'), rb=getRec(k,'en2tr');
-    const good=function(r,st){return r&&r.s>0&&(st==='edge'||st==='mastered');};
+    const good=function(r,st){return r&&(r.s>0||(r.r||0)>=2)&&(st==='edge'||st==='mastered');};
     if(good(ra,cardState(k,'tr2en'))||good(rb,cardState(k,'en2tr')))ok++;
   });
   return cards.length?Math.round(100*ok/cards.length):100;
@@ -1690,8 +1712,9 @@ function refreshLockUI(){
   });
 }
 function rebuildDecks(){
-  drillDeck.reset(drillItems(),true);
-  vocabDeck.reset(vocabItems(),true);
+  /* level changes rebuild as Smart rounds, so new cards stay rationed */
+  drillDeck.smart(drillItems());
+  vocabDeck.smart(vocabItems());
 }
 /* ========================= end LEVELS ==================================== */
 
@@ -1742,14 +1765,22 @@ function celebrate(cardEl){
    longer spacing between repetitions of the same word, which is what drives retention
    (Kornell 2009: one 20-card stack beat four 5-card stacks). 10 new items per session
    is the standard introduction rate in L2 flashcard experiments; a few older items are
-   mixed in per the cumulative-testing effect (Maie et al. 2025). */
+   mixed in per the cumulative-testing effect (Maie et al. 2025).
+   New items compete with review for the same practice time (Lindsey et al. 2014,
+   Psych Sci), and a Leitner-style queue shows a sharp phase transition once new
+   items arrive faster than reviews clear (Reddy et al. 2016, KDD; abstract only).
+   So the new-item quota shrinks while reviews are due: full 10 up to a backlog of
+   20 (one round's edge block), tapering to a floor of 2 at 40. The 20/40/2 numbers
+   are this app's judgement; no study gives them. */
 const SMART_RELEARN=15, SMART_EDGE=20, SMART_NEW=10, SMART_REVIEW=5;
+const SMART_BACKLOG_LO=20, SMART_BACKLOG_HI=40, SMART_NEW_MIN=2;
 function makeDeck(cfg){
   let deck=[], i=0, modeTag='', smartMode=false, curDir='one', undoState=null;
   let mode='reveal', gen=0, pendingRepaint=false, answeredLock=null, curEm='reveal', verifying=false, pass=1;
   const probeNext={};   /* key -> mode to force on that card's next presentation */
   let celebrated=false;
-  const rs={answered:0,right:0,wrong:0,introduced:0};   /* this round's story */
+  let throttled=0;   /* last Smart round's backlog when it cut the new-item quota */
+  const rs={answered:0,right:0,wrong:0,introduced:0,checks:0,checksOk:0};   /* this round's story */
   const presented={};    /* keys shown as a study presentation this round */
   let presenting=false;
   const undoBtn=document.getElementById(cfg.undoBtn);
@@ -1772,15 +1803,24 @@ function makeDeck(cfg){
     if(cfg.canMode&&!cfg.canMode(c,mode))return 'reveal';
     return mode;
   }
-  /* trust-but-verify (S3): the mastery-completing repetition (streak at 2)
-     of a reveal-mode card is served in an objective format when the card
-     supports one, so mastery can never be reached on the honor system alone.
-     Passing this checkpoint records 's' - it is a verified strong answer,
-     not free-floating recognition. Preference: build > choices (cloze will
-     take the head of this chain when it ships, per ROADMAP A9). */
+  /* trust-but-verify (S3): in reveal mode two retrievals are served in an
+     objective format when the card supports one - the FIRST strong answer a
+     card ever earns in a direction, and the mastery-completing one (streak at
+     2). Self-scoring is biased toward giving credit (Lipko et al. 2009;
+     Grimaldi & Karpicke 2014; abstracts) and learners judge by fluency
+     (Karpicke 2009), so neither a word's first credit (which counts toward
+     unlocking) nor its mastery rests on the honor system alone. The middle
+     step stays self-graded recall: recall practice outperforms recognition
+     practice (Rowland 2014 meta-analysis, abstract). The first check waits
+     until the word has been MET (shown for study this round, or any record):
+     guessing before study gives no associative benefit for unrelated pairs
+     (Seabrooke et al. 2021, Mem Cogn, full text). Passing records 's'. */
   function verifyMode(c,dir){
-    const rec=getRec(cfg.keyOf(c),dir);
-    if(!rec||rec.k!==2)return null;
+    const key=cfg.keyOf(c), rec=getRec(key,dir);
+    const last=!!rec&&rec.k===2;
+    const met=!!presented[key+dir]||!!STATS[key];
+    const first=(!rec||!rec.s)&&met;
+    if(!last&&!first)return null;
     const prefs=dir==='en2tr'?['cloze','build','choices']:['build','choices'];
     for(let ix=0;ix<prefs.length;ix++){
       const m=prefs[ix];
@@ -1789,6 +1829,8 @@ function makeDeck(cfg){
     return null;
   }
   function effMode(){return curEm;}
+  /* known (a strong answer) in the other practice direction - vocab only */
+  function knownElsewhere(c){return !!(cfg.knownElsewhere&&cfg.knownElsewhere(c));}
   const card=document.getElementById(cfg.card);
   const gradesEl=document.getElementById(cfg.grades);
   const revealBtn=document.getElementById(cfg.revealBtn);
@@ -1833,6 +1875,9 @@ function makeDeck(cfg){
         sum='You answered '+rs.answered+(rs.answered===1?' card':' cards')
            +': '+rs.right+' right · '+rs.wrong+' missed';
         if(rs.introduced>0)sum+=' · '+rs.introduced+' new '+(rs.introduced===1?'word':'words')+' met';
+        /* objective checks are the calibration signal for self-grading:
+           feedback is what shrinks overconfidence (Leon et al. 2023, abstract) */
+        if(rs.checks>0)sum+=' · checks passed: '+rs.checksOk+' of '+rs.checks;
         sum+='.';
       }
       document.getElementById(cfg.answer).textContent=sum;
@@ -1884,7 +1929,7 @@ function makeDeck(cfg){
       cfg.chipOf(c)+((dir&&!c.excl)?(curDir==='tr2en'?' · Türkçe → English':' · English → Türkçe'):'')
       /* introductions are announced BEFORE the attempt, not discovered after:
          a first encounter in this direction is labeled up front */
-      +((!c.excl&&!getRec(cfg.keyOf(c),curDir))?' · new':'');
+      +((!c.excl&&!getRec(cfg.keyOf(c),curDir)&&!knownElsewhere(c))?' · new':'');
     document.getElementById(cfg.stat).textContent=statText(cfg.keyOf(c),curDir);
     frontEl.innerHTML=cfg.frontOf(c,dir);
     answerEl.innerHTML=cfg.answerOf(c,dir);
@@ -1896,15 +1941,17 @@ function makeDeck(cfg){
                :(i+1)+' / '+deck.length
                  +(pass>1?' · pass '+pass+' - strong answers set cards aside':'')
                  +(modeTag?' · '+modeTag:'');
-    /* FIRST ENCOUNTER = STUDY PRESENTATION (reveal-mode smart rounds only):
-       a never-seen card is shown open - recall of never-encoded material is a
-       guaranteed failure, not desirable difficulty (presentation-then-retrieval
-       is the paradigm in every study the Smart constants cite). The card stays
-       in the round; its first real retrieval comes when the round wraps back.
-       Choices-mode first encounters stay as they are: a guess with immediate
-       feedback is legitimate pretesting (errorful generation). */
-    if(smartMode&&curEm==='reveal'&&!verifying&&!c.excl&&!c.num
-       &&!getRec(cfg.keyOf(c),curDir)&&!presented[cfg.keyOf(c)+curDir]){
+    /* FIRST ENCOUNTER = STUDY PRESENTATION (Smart rounds, every mode but
+       timed): a never-seen card is shown open - recall of never-encoded
+       material is a guaranteed failure, not desirable difficulty. This now
+       covers choices and cloze too: guessing an arbitrary L2 word before study
+       improves later recognition of the target but not the cue-target link
+       (Seabrooke et al. 2021, full text; Huelser & Metcalfe 2012, abstract),
+       and the link is what the learner needs. A word already known in the
+       other direction is not new (approximate associative symmetry; Lindsey
+       et al. 2014 trained one direction for that reason) and is not shown. */
+    if(smartMode&&curEm!=='timed'&&curEm!=='excl'&&!verifying&&!c.excl&&!c.num
+       &&!getRec(cfg.keyOf(c),curDir)&&!knownElsewhere(c)&&!presented[cfg.keyOf(c)+curDir]){
       presented[cfg.keyOf(c)+curDir]=1;
       rs.introduced++;
       presenting=true;
@@ -2005,9 +2052,15 @@ function makeDeck(cfg){
   function answer(correct,opts){
     if(presenting||pendingRepaint||!deck[i])return;
     if(answeredLock&&answeredLock===cfg.keyOf(deck[i]))return;
-    const em=curEm;
-    const g=correct?(verifying?'s':MODE_GRADE[em].ok):'d';
+    const em=curEm, wasCheck=verifying;
     const pKey=cfg.keyOf(deck[i]), hadProbe=probeNext[pKey];
+    let g=correct?(verifying?'s':MODE_GRADE[em].ok):'d';
+    /* a correct 4-option pick on a word never met is a 1-in-4 guess, not a
+       strong answer: record recognition (no streak step, no unlock credit) */
+    const met=!!STATS[pKey]||!!hadProbe||!!presented[pKey+curDir]
+      ||!!presented[pKey+'tr2en']||!!presented[pKey+'en2tr'];
+    if(g==='s'&&em==='cloze'&&!verifying&&!met)g='r';
+    if(wasCheck){rs.checks++;if(correct)rs.checksOk++;}
     delete probeNext[pKey];   /* the forced presentation happened */
     const res=record(g,{objectiveCorrect:correct&&em!=='reveal'});
     /* undo must also bring the forced probe back, or an undone probe answer
@@ -2060,25 +2113,48 @@ function makeDeck(cfg){
     else{i=u.iPrev;}
     setUndo(null);render();
   }
-  function reset(items,doShuffle){deck=items.slice();if(doShuffle)shuffle(deck);modeTag='';smartMode=false;gen++;setUndo(null);answeredLock=null;pass=1;celebrated=false;rs.answered=rs.right=rs.wrong=rs.introduced=0;for(const k in probeNext)delete probeNext[k];for(const k in presented)delete presented[k];i=0;render();}
+  function reset(items,doShuffle){deck=items.slice();if(doShuffle)shuffle(deck);modeTag='';smartMode=false;gen++;setUndo(null);answeredLock=null;pass=1;celebrated=false;rs.answered=rs.right=rs.wrong=rs.introduced=rs.checks=rs.checksOk=0;for(const k in probeNext)delete probeNext[k];for(const k in presented)delete presented[k];i=0;render();}
   function weakFirst(items){
     const a=shuffle(items.slice());
     a.sort((x,y)=>weakScore(cfg.keyOf(x),dirFor(x))-weakScore(cfg.keyOf(y),dirFor(y)));
-    deck=a;modeTag='weak first';smartMode=false;gen++;setUndo(null);answeredLock=null;pass=1;celebrated=false;rs.answered=rs.right=rs.wrong=rs.introduced=0;for(const k in probeNext)delete probeNext[k];for(const k in presented)delete presented[k];i=0;render();
+    deck=a;modeTag='weak first';smartMode=false;gen++;setUndo(null);answeredLock=null;pass=1;celebrated=false;rs.answered=rs.right=rs.wrong=rs.introduced=rs.checks=rs.checksOk=0;for(const k in probeNext)delete probeNext[k];for(const k in presented)delete presented[k];i=0;render();
   }
   /* Smart queue: misses first, then the productive edge interleaved (2:1) with a small
      dose of new cards in the books' own teaching order, then a few mastered reviews. */
   function smart(items){
     const b={new:[],learning:[],edge:[],mastered:[]};
-    items.forEach(c=>b[cardState(cfg.keyOf(c),dirFor(c))].push(c));
-    /* weakest first within relearn and edge, then cap each block; leftovers wait for
-       the next round rather than bloating this one */
+    items.forEach(c=>{
+      let st=cardState(cfg.keyOf(c),dirFor(c));
+      if(st==='new'&&knownElsewhere(c))st='edge';   /* the other direction of a known word */
+      b[st].push(c);
+    });
+    /* relearn: weakest first. edge: DUE first - cards not yet practised today
+       (in any format), least recently seen first. Same-day repeats add little:
+       three massed recalls gave no advantage over one, 26% vs 25%, while spaced
+       ones tripled retention (Karpicke & Bauernschmidt 2011, full text). Weakest-first starved the
+       cards one step from mastery (their score is high) for weeks. Reviewing the
+       item nearest to being forgotten is the rule adaptive schedulers converge
+       on, and a simple threshold version of it performs close to optimal
+       (Lindsey et al. 2014, full text, fn. 10); staleness is this app's proxy
+       for that, with no fitted memory model. */
+    const today=dayStamp(Date.now());
+    const recOf=c=>getRec(cfg.keyOf(c),dirFor(c));
+    const due=c=>{const r=recOf(c);return !r||dayStamp(r.ts||0)!==today;};
     b.learning.sort((x,y)=>weakScore(cfg.keyOf(x),dirFor(x))-weakScore(cfg.keyOf(y),dirFor(y)));
-    b.edge.sort((x,y)=>weakScore(cfg.keyOf(x),dirFor(x))-weakScore(cfg.keyOf(y),dirFor(y)));
+    b.edge.sort((x,y)=>{
+      const dx=due(x)?0:1, dy=due(y)?0:1;
+      if(dx!==dy)return dx-dy;
+      const rx=recOf(x), ry=recOf(y);
+      return (rx?rx.ts:0)-(ry?ry.ts:0);
+    });
     b.new.sort(cfg.introCmp);
+    const backlog=b.learning.length+b.edge.filter(due).length;
+    const newQuota=backlog<=SMART_BACKLOG_LO?SMART_NEW
+      :Math.max(SMART_NEW_MIN,Math.round(SMART_NEW*(SMART_BACKLOG_HI-backlog)/(SMART_BACKLOG_HI-SMART_BACKLOG_LO)));
     const relearn=shuffle(b.learning.slice(0,SMART_RELEARN));
     const edge=shuffle(b.edge.slice(0,SMART_EDGE));
-    const fresh=b.new.slice(0,SMART_NEW);
+    const fresh=b.new.slice(0,newQuota);
+    throttled=(newQuota<SMART_NEW&&b.new.length>newQuota)?backlog:0;
     /* review the LEAST RECENTLY SEEN mastered cards, not random ones - the longest
        intervals are where forgetting happens (spaced-repetition principle) */
     b.mastered.sort((x,y)=>{
@@ -2104,8 +2180,9 @@ function makeDeck(cfg){
     }
     if(!deck.length)deck=shuffle(items.slice());
     modeTag='smart: '+relearn.length+' relearn · '+edge.length+' edge · '+fresh.length+' new'
+      +(throttled?' (fewer: '+throttled+' due for review)':'')
       +(review.length?' · '+review.length+' review':'');
-    smartMode=true;gen++;setUndo(null);answeredLock=null;pass=1;celebrated=false;rs.answered=rs.right=rs.wrong=rs.introduced=0;for(const k in probeNext)delete probeNext[k];for(const k in presented)delete presented[k];i=0;render();
+    smartMode=true;gen++;setUndo(null);answeredLock=null;pass=1;celebrated=false;rs.answered=rs.right=rs.wrong=rs.introduced=rs.checks=rs.checksOk=0;for(const k in probeNext)delete probeNext[k];for(const k in presented)delete presented[k];i=0;render();
   }
   card.addEventListener('click',reveal);
   card.addEventListener('keydown',e=>{if(e.key==='Enter')reveal();});
@@ -2124,6 +2201,7 @@ function makeDeck(cfg){
   }
   undoBtn.addEventListener('click',undo);
   return {reset,next,prev,reveal,grade,weakFirst,smart,undo,setMode,answer,scheduleProbe,currentKey:function(){return deck[i]?cfg.keyOf(deck[i]):null;},
+          throttled:function(){return throttled;},
           effMode:function(){return effMode(deck[i]);},tab:cfg.tab};
 }
 
@@ -2420,7 +2498,7 @@ function drillItems(){
   const pool=t==='all'?DRILLS.filter(inPlayDrill).concat(numItems()):DRILLS.filter(d=>d.t===t).filter(inPlayDrill);
   return pool;
 }
-topicSel.addEventListener('change',()=>drillDeck.reset(drillItems(),true));
+topicSel.addEventListener('change',()=>drillDeck.smart(drillItems()));
 document.getElementById('drill-shuffle').addEventListener('click',()=>drillDeck.reset(drillItems(),true));
 document.getElementById('drill-weak').addEventListener('click',()=>drillDeck.weakFirst(drillItems()));
 document.getElementById('drill-smart').addEventListener('click',()=>drillDeck.smart(drillItems()));
@@ -2496,6 +2574,10 @@ const vocabDeck=makeDeck({
      a common-sense boost for core daily words (see add_ranks.py / rerank pass) */
   introCmp:(a,b)=>(a.o!=null?a.o:1e9)-(b.o!=null?b.o:1e9),
   dirOf:vocabDirOf,   /* fixed selector, or each card's weaker direction in mixed */
+  knownElsewhere:function(c){
+    const e=STATS[vocabKey(c.excl?c.excl.card:c)];
+    return !!(e&&((e.tr2en&&e.tr2en.s>0)||(e.en2tr&&e.en2tr.s>0)));
+  },
   modes:['choices','cloze','timed'],
   modeDir:{cloze:'en2tr',excl:'tr2en'},
   nextStep:function(){
@@ -2513,7 +2595,12 @@ const vocabDeck=makeDeck({
       else if(!STATS[k])unseen++;
     });
     if(learn>0)return learn+(learn===1?' word needs':' words need')+' relearning · Smart serves them first.';
-    if(unseen>0)return unseen+(unseen===1?' word is':' words are')+' still new here · another Smart round introduces up to 10 of them.';
+    if(unseen>0){
+      const th=vocabDeck.throttled();
+      return unseen+(unseen===1?' word is':' words are')+' still new here · '
+        +(th?'fewer new words come in while '+th+' are due for review; clearing them brings the full 10 back.'
+            :'another Smart round introduces up to 10 of them.');
+    }
     if(items.length&&solid===items.length)
       return 'Everything here is mastered · try a timed round for speed, or the Grammar drills tab.';
     return "Today's streak credit is spent on most of these · tomorrow's round will move them further.";
@@ -2885,8 +2972,8 @@ function vocabItems(){
   }
   return pool;
 }
-dirSel.addEventListener('change',()=>vocabDeck.reset(vocabItems(),true));
-setSel.addEventListener('change',()=>vocabDeck.reset(vocabItems(),true));
+dirSel.addEventListener('change',()=>vocabDeck.smart(vocabItems()));
+setSel.addEventListener('change',()=>{maybeUnlock();refreshLockUI();vocabDeck.smart(vocabItems());});
 document.getElementById('vocab-shuffle').addEventListener('click',()=>vocabDeck.reset(vocabItems(),true));
 document.getElementById('vocab-weak').addEventListener('click',()=>vocabDeck.weakFirst(vocabItems()));
 document.getElementById('vocab-smart').addEventListener('click',()=>vocabDeck.smart(vocabItems()));
@@ -2930,7 +3017,7 @@ document.getElementById('lvl-off').addEventListener('change',e=>{
 (function(){const el=document.getElementById('about-vocab-n');if(el)el.textContent=VOCAB.length;})();
 document.getElementById('lvl-off').checked=LV.off;
 refreshLockUI();
-rebuildDecks();
+/* the decks' first rounds are built below (fresh or returning learner) */
 
 /* A FRESH learner starts IN the scheduler, not in a 45-card browse pile:
    the first thing each practice tab shows is a Smart round - at most 10 new
@@ -2950,10 +3037,14 @@ function freshSmart(deckObj,itemsFn,selId,uiField){
   }
   deckObj.smart(itemsFn());
 }
+/* returning learners start in a Smart round too: a shuffled full pile tested
+   unseen words cold and bypassed the new-word quota (found in review). */
 if(!Object.keys(STATS).some(function(k){return k.indexOf('vocab|')===0;}))
   freshSmart(vocabDeck,vocabItems,'vocab-mode','vocabMode');
+else vocabDeck.smart(vocabItems());
 if(!Object.keys(STATS).some(function(k){return k.indexOf('drill|')===0||k.indexOf('num|')===0;}))
   freshSmart(drillDeck,drillItems,'drill-mode','drillMode');
+else drillDeck.smart(drillItems());
 
 /* after a MOUSE click a button would keep focus and swallow the Space shortcut
    (Space on a focused button is native re-activation); blur it - but only for
