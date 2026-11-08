@@ -1023,8 +1023,9 @@ level yourself on the Help tab.</p>
          with a 20-card "edge" block.</p>
       <p><b>Introduction rate:</b> about 10 new items per session, with older
          material mixed back in (cumulative practice improves retention;
-         Maie et al. 2025, <i>TESOL Quarterly</i>). Hence 10 new + 5 review
-         per round. New words compete with review for your time (Lindsey et
+         Maie et al. 2025, <i>TESOL Quarterly</i>). Hence up to 10 new words
+         and 10 due reviews per round; when fewer new words come in, due
+         reviews take their place. New words compete with review for your time (Lindsey et
          al. 2014, <i>Psychological Science</i>), so fewer come in while many
          words are due, down to 2 per round; the round's counter says so.</p>
       <p><b>Study first, then test:</b> a new word is shown open before it is
@@ -1038,6 +1039,12 @@ level yourself on the Help tab.</p>
          credit for answers that were wrong, and seeing the answer only
          partly fixes this (Lipko et al. 2009; Grimaldi &amp; Karpicke 2014).
          The round summary shows how many checks you passed.</p>
+      <p><b>Mastered words come back on a schedule:</b> 4 days after mastery,
+         then 8, 16, 32, 64 and 128 days, each step only after a successful
+         check. A miss sends the word back to relearning. This is the Leitner
+         system (Settles &amp; Meeder 2016, <i>ACL</i>): gaps should grow with how
+         long you want to keep a word (Cepeda et al. 2008, <i>Psychological
+         Science</i>). The Progress tab shows how many reviews are due.</p>
       <p><b>What comes back first:</b> words that can still advance today,
          least recently seen first, so a word one step from mastery is not left
          waiting behind newer ones.</p>
@@ -1297,21 +1304,55 @@ function saveDays(){
 function tallyDay(){const t=dayStamp(Date.now());DAYS.d[t]=(DAYS.d[t]||0)+1;saveDays();return t;}
 /* undo of a grade takes its practice-day answer back too */
 function untallyDay(t){if(!t||!DAYS.d[t])return;if(DAYS.d[t]>1)DAYS.d[t]--;else delete DAYS.d[t];saveDays();}
+/* REVIEW SCHEDULE for mastered cards (Leitner boxes). A card that reaches
+   mastery enters box 0 and is due again REVIEW_DAYS[0] days later; each
+   successful review on or after its due date moves it up a box, roughly
+   doubling the interval; a miss sends it back to relearning (streak 0),
+   from where it must earn mastery again. Doubling intervals are the Leitner
+   system as used by Duolingo, which matched a fitted half-life model on
+   ranking recall in 12.9 million practice logs (Settles & Meeder 2016, ACL,
+   full text: AUC .542 vs .538). Gaps must grow with how long the word should
+   be kept (Cepeda et al. 2008, full text: optimal gap ~20-40% of a 1-week
+   retention interval, ~5-10% of a 1-year one). The day values continue the
+   3-day mastery criterion and are this app's choice; no study fixes them.
+   Before this, mastered words came back 5 per round, least recently seen
+   first, so their gap depended on pile size, not on time. */
+const REVIEW_DAYS=[4,8,16,32,64,128];
+const DAY_MS=86400000;
+function midnight(t){const d=new Date(t);d.setHours(0,0,0,0);return d.getTime();}
+/* records mastered before review boxes existed have no `due`: box 0, counted
+   from their last answer, so the backlog comes back gradually (oldest first) */
+function reviewDue(r){
+  if(!r)return Infinity;
+  if(typeof r.due==='number')return r.due;
+  return midnight(r.ts||0)+REVIEW_DAYS[0]*DAY_MS;
+}
+function reviewBox(r){return r&&typeof r.b==='number'?r.b:0;}
+function isReviewDue(r,now){return !!r&&(r.k||0)>=3&&reviewDue(r)<=now;}
 function recordGrade(key,dir,g){
   const e=STATS[key]||(STATS[key]={});
   const s=e[dir]||(e[dir]={s:0,g:0,d:0,l:'',k:0,ts:0,sd:0});
   if(g==='r')s.r=(s.r||0)+1;else s[g]++;
   s.l=g;
   const now=Date.now(), today=dayStamp(now);
+  const wasMastered=(s.k||0)>=3, wasDue=isReviewDue(s,now);
   if(g==='s'){
     /* one streak advance per day: the 2nd..nth strong answer today counts in `s`
        but not toward mastery - spacing, not massing, is what earns the streak */
     if(s.sd!==today){s.k=(s.k||0)+1;s.sd=today;}
+    /* review schedule: entering mastery starts box 0; a strong answer on a DUE
+       review moves up a box; an early extra answer (Shuffle) changes nothing */
+    if(!wasMastered&&s.k>=3){s.b=0;s.due=midnight(now)+REVIEW_DAYS[0]*DAY_MS;}
+    else if(wasMastered&&wasDue){
+      s.b=Math.min(reviewBox(s)+1,REVIEW_DAYS.length-1);
+      s.due=midnight(now)+REVIEW_DAYS[s.b]*DAY_MS;
+    }
   }else if(g==='r'){
     /* objective RECOGNITION success: positive evidence, but it neither proves
        nor disproves production mastery - the streak is untouched either way */
   }else{
     s.k=0;  /* any lapse restarts the spaced-retrieval criterion */
+    delete s.b;delete s.due;   /* and takes the card off the review schedule */
   }
   s.ts=now;
   saveStats();
@@ -1762,7 +1803,7 @@ function celebrate(cardEl){
 
 /* generic deck driver */
 /* Smart-round block sizes, from the vocabulary-learning literature:
-   one round = up to 15 relearn + 20 edge + 10 new + 5 mastered = max 50 cards.
+   one round = up to 15 relearn + 20 edge + 10 new + 10 due reviews = max 55 cards.
    Set-size studies (Nakata & Webb 2016, SSLA: 4- vs 10- vs 20-item blocks) found small
    sets feel easier during practice but give NO retention advantage - larger blocks mean
    longer spacing between repetitions of the same word, which is what drives retention
@@ -1775,7 +1816,7 @@ function celebrate(cardEl){
    So the new-item quota shrinks while reviews are due: full 10 up to a backlog of
    20 (one round's edge block), tapering to a floor of 2 at 40. The 20/40/2 numbers
    are this app's judgement; no study gives them. */
-const SMART_RELEARN=15, SMART_EDGE=20, SMART_NEW=10, SMART_REVIEW=5;
+const SMART_RELEARN=15, SMART_EDGE=20, SMART_NEW=10, SMART_REVIEW=10;
 const SMART_BACKLOG_LO=20, SMART_BACKLOG_HI=40, SMART_NEW_MIN=2;
 function makeDeck(cfg){
   let deck=[], i=0, modeTag='', smartMode=false, curDir='one', undoState=null;
@@ -1822,9 +1863,12 @@ function makeDeck(cfg){
   function verifyMode(c,dir){
     const key=cfg.keyOf(c), rec=getRec(key,dir);
     const last=!!rec&&rec.k===2;
+    /* a due review of a mastered card is a check too: a confident self-grade
+       is exactly what lets a half-forgotten word pass (Karpicke 2009) */
+    const review=isReviewDue(rec,Date.now());
     const met=!!presented[key+dir]||!!STATS[key];
     const first=(!rec||!rec.s)&&met;
-    if(!last&&!first)return null;
+    if(!last&&!first&&!review)return null;
     const prefs=dir==='en2tr'?['cloze','build','choices']:['build','choices'];
     for(let ix=0;ix<prefs.length;ix++){
       const m=prefs[ix];
@@ -2166,26 +2210,28 @@ function makeDeck(cfg){
       return (rx?rx.ts:0)-(ry?ry.ts:0);
     });
     b.new.sort(cfg.introCmp);
-    const backlog=b.learning.length+b.edge.filter(due).length;
+    /* mastered cards come back only when their review is due, most overdue
+       (relative to their interval) first; due reviews compete with new words
+       for the round like any other backlog */
+    const nowMs=Date.now();
+    const overdue=c=>{const r=recOf(c);return (nowMs-reviewDue(r))/(REVIEW_DAYS[reviewBox(r)]*DAY_MS);};
+    const dueReviews=b.mastered.filter(c=>isReviewDue(recOf(c),nowMs)).sort((x,y)=>overdue(y)-overdue(x));
+    const backlog=b.learning.length+b.edge.filter(due).length+dueReviews.length;
     const newQuota=backlog<=SMART_BACKLOG_LO?SMART_NEW
       :Math.max(SMART_NEW_MIN,Math.round(SMART_NEW*(SMART_BACKLOG_HI-backlog)/(SMART_BACKLOG_HI-SMART_BACKLOG_LO)));
     const relearn=shuffle(b.learning.slice(0,SMART_RELEARN));
     const edge=shuffle(b.edge.slice(0,SMART_EDGE));
     const fresh=b.new.slice(0,newQuota);
     throttled=(newQuota<SMART_NEW&&b.new.length>newQuota)?backlog:0;
-    /* review the LEAST RECENTLY SEEN mastered cards, not random ones - the longest
-       intervals are where forgetting happens (spaced-repetition principle) */
-    b.mastered.sort((x,y)=>{
-      const rx=getRec(cfg.keyOf(x),dirFor(x)), ry=getRec(cfg.keyOf(y),dirFor(y));
-      return (rx?rx.ts:0)-(ry?ry.ts:0);
-    });
     const mix=[], e=edge.slice(), f=fresh.slice();
     while(e.length||f.length){
       if(e.length)mix.push(e.shift());
       if(e.length)mix.push(e.shift());
       if(f.length)mix.push(f.shift());
     }
-    const review=b.mastered.slice(0,SMART_REVIEW);
+    /* new-word slots the throttle (or an exhausted pool) leaves empty go to
+       due reviews: the point of slowing intake is to make room for review */
+    const review=dueReviews.slice(0,SMART_REVIEW+(SMART_NEW-fresh.length));
     deck=relearn.concat(mix,review);
     /* exclusion introduction (PLAN 5d): the round's first NEW card arrives as
        a learn-by-exclusion matching screen when 4 suitable known pairs exist */
@@ -3097,7 +3143,7 @@ document.addEventListener('click',e=>{
     if(!r||typeof r!=='object')return false;
     const num=function(n){return typeof n==='number'&&isFinite(n)&&n>=0;};
     if(!['s','g','d'].every(k=>num(r[k])))return false;
-    return ['r','k','ts','sd'].every(k=>r[k]===undefined||num(r[k]))
+    return ['r','k','ts','sd','b','due'].every(k=>r[k]===undefined||num(r[k]))
       &&(r.l===undefined||['s','g','d','r',''].indexOf(r.l)>=0);
   }
   document.getElementById('data-export').addEventListener('click',()=>{
@@ -3163,6 +3209,8 @@ document.addEventListener('click',e=>{
             inc.k=Math.max(inc.k||0,have.k||0);
             inc.ts=Math.max(inc.ts||0,have.ts||0);
             inc.sd=Math.max(inc.sd||0,have.sd||0);
+            if(have.b!==undefined||inc.b!==undefined)inc.b=Math.max(inc.b||0,have.b||0);
+            if(have.due!==undefined||inc.due!==undefined)inc.due=Math.max(inc.due||0,have.due||0);
           }
           cur[dir]=inc;took++;
         }
@@ -3290,6 +3338,13 @@ function renderProgress(){
   const dl=progDirs().length>1?'both directions':(progDirs()[0]==='tr2en'?'Türkçe → English':'English → Türkçe');
   let sum=tot.mastered+' of '+VOCAB.length+' words mastered ('+dl+') · '
     +tot.edge+' in progress · '+tot.learning+' relearning · '+tot.unseen+' still ahead.';
+  const nowP=Date.now();let dueN=0,nextDue=Infinity;
+  VOCAB.forEach(function(v){const k=vocabKey(v);progDirs().forEach(function(d){
+    const r=getRec(k,d);if(!r||(r.k||0)<3)return;
+    if(isReviewDue(r,nowP))dueN++;else nextDue=Math.min(nextDue,reviewDue(r));});});
+  if(dueN)sum+=' '+dueN+(dueN===1?' mastered word is':' mastered words are')+' due for review.';
+  else if(isFinite(nextDue)){const dd=Math.max(1,Math.round((nextDue-midnight(nowP))/DAY_MS));
+    sum+=' Next review due in '+dd+(dd===1?' day.':' days.');}
   if(!LV.off&&LV.u<LEVELS.length)
     sum+=' Level '+LV.u+' of '+LEVELS.length+' · '+levelProgressPct(LV.u)+'% toward the next unlock.';
   document.getElementById('prog-summary').textContent=sum;
