@@ -272,8 +272,11 @@
   <details open>
     <summary>Quick start</summary>
     <div class="body">
-      <p><b>1.</b> Open <b>Vocabulary</b> and press <b>Smart</b>.</p>
-      <p><b>2.</b> Try to recall the answer, then click the card (or press
+      <p><button type="button" id="intro-start" class="primary">Start here: your first round</button>
+         <span class="en">opens Vocabulary in auto mode with a Smart round; use it again whenever you come back.</span></p>
+      <p><b>1.</b> New words are shown open first: read them and press <b>Next</b>.
+         They come back a little later as a quick check: pick the right answer.</p>
+      <p><b>2.</b> For words you have met before, try to recall the answer, then click the card (or press
          <kbd>space</kbd>) to reveal it.</p>
       <p><b>3.</b> Grade yourself honestly: <i>I know it strongly</i> ·
          <i>I guessed</i> · <i>I don't know</i>. The scheduling relies on honest answers; a guess counts as not
@@ -732,8 +735,8 @@ level yourself on the Help tab.</p>
 <section class="tab" id="tab-drill">
   <div class="controls">
     <select id="drill-topic" aria-label="Drill topic"><option value="all">All topics</option></select>
-    <select id="drill-mode" aria-label="Practice mode" title="How you answer: reveal and self-grade, build the answer from tiles, or pick from choices">
-      <option value="reveal">Mode: reveal</option>
+    <select id="drill-mode" aria-label="Practice mode" title="Auto (recommended): new drills are shown first, then checked, recalled and checked again - the only mode that takes drills all the way to mastered. Build tiles and choices are extra practice formats.">
+      <option value="reveal">Mode: auto (recommended)</option>
       <option value="build">Mode: build tiles</option>
       <option value="choices">Mode: choices</option>
     </select>
@@ -780,8 +783,8 @@ level yourself on the Help tab.</p>
       <option value="tr2en">Turkish → English</option>
       <option value="en2tr">English → Turkish</option>
     </select>
-    <select id="vocab-mode" aria-label="Practice mode" title="How you answer: reveal and self-grade, pick from choices, or fill the blank in a sentence">
-      <option value="reveal">Mode: reveal</option>
+    <select id="vocab-mode" aria-label="Practice mode" title="Auto (recommended): new words are shown first, then checked, recalled and checked again - the only mode that takes words all the way to mastered. Choices, fill the blank and timed are extra practice formats.">
+      <option value="reveal">Mode: auto (recommended)</option>
       <option value="choices">Mode: choices</option>
       <option value="cloze">Mode: fill the blank</option>
       <option value="timed">Mode: timed round</option>
@@ -834,7 +837,7 @@ level yourself on the Help tab.</p>
   <p class="prog-summary" id="prog-summary"></p>
   <h3>Vocabulary by level</h3>
   <div id="prog-levels"></div>
-  <p class="prog-legend"><i class="pb-mastered"></i>mastered <i class="pb-edge"></i>in progress <i class="pb-learning"></i>relearning · grey = not met yet</p>
+  <p class="prog-legend"><i class="pb-mastered"></i>mastered <i class="pb-edge"></i>in progress <i class="pb-learning"></i>relearning · grey = not met yet · number = words met / words in the level</p>
   <h3>Grammar drills</h3>
   <div id="prog-drills"></div>
   <h3>Numbers</h3>
@@ -860,7 +863,7 @@ level yourself on the Help tab.</p>
       </p>
       <p>Content unlocks level by level as you practice: the next level opens
          when about 60% of the current level's words (in the word set you have
-         chosen) are ones you have shown you know: a correct check in reveal
+         chosen) are ones you have shown you know: a correct check in auto
          mode, or two correct picks in choices or matching. This is a default
          pace, not a wall. Lock or unlock any
          level above, in any order; reference sections are always readable.</p>
@@ -1029,7 +1032,7 @@ level yourself on the Help tab.</p>
          word's meaning before seeing it helps you recognise it later but not
          link it to its meaning (Seabrooke et al. 2021, <i>Memory &amp;
          Cognition</i>).</p>
-      <p><b>Checks, not only self-grades:</b> in reveal mode a word's first
+      <p><b>Checks, not only self-grades:</b> in auto mode a word's first
          strong answer and its mastery-completing answer are objective checks
          (fill the blank or pick the answer). People tend to give themselves
          credit for answers that were wrong, and seeing the answer only
@@ -2594,6 +2597,11 @@ const vocabDeck=makeDeck({
       else if(sts.every(function(s){return s==='mastered';}))solid++;
       else if(!STATS[k])unseen++;
     });
+    /* choices practice is recognition: it unlocks levels but never builds the
+       mastery streak - say so, or a choices-only learner sees the same words
+       forever with no explanation (user report) */
+    if(document.getElementById('vocab-mode').value==='choices'&&solid<items.length)
+      return 'Choices answers count toward unlocking levels, but words are only mastered by recalling them · switch Mode to auto to finish these words.';
     if(learn>0)return learn+(learn===1?' word needs':' words need')+' relearning · Smart serves them first.';
     if(unseen>0){
       const th=vocabDeck.throttled();
@@ -3001,6 +3009,15 @@ if(FIRST_RUN){
 }
 
 /* levels: global controls + first paint (decks exist from here on) */
+/* Intro "Start here": the recommended path in one press - Vocabulary, auto
+   mode, a Smart round (user report: it was not obvious where to start) */
+document.getElementById('intro-start').addEventListener('click',()=>{
+  const sel=document.getElementById('vocab-mode');
+  if(sel.value!=='reveal'){sel.value='reveal';sel.dispatchEvent(new Event('change'));}
+  document.querySelector('nav button[data-tab="vocab"]').click();
+  vocabDeck.smart(vocabItems());
+  const card=document.getElementById('vocab-card');if(card&&card.focus)card.focus();
+});
 document.getElementById('lvl-unlock-all').addEventListener('click',()=>{
   LEVELS.forEach((l,ix)=>{const n=ix+1;if(!unlocked(n))LV.ov[n]='open';});
   saveLevels();refreshLockUI();rebuildDecks();
@@ -3209,12 +3226,24 @@ document.querySelectorAll('.tr,.ex-tr').forEach(el=>el.setAttribute('lang','tr')
    monitor content AND behavior; Borovoi 2020: show accumulated AND remaining;
    Aguilar 2022: mastery-framed, self-referenced; Sudina 2023: frequency over
    minutes). Recomputed on every visit from STATS/DAYS - no derived storage. */
+/* a word's state in the direction(s) the learner practises (Vocabulary tab
+   selector): requiring BOTH directions kept "mastered" at 0 forever for a
+   learner who only practises one (user report) */
+function progDirs(){
+  const el=document.getElementById('vocab-dir'), d=el?el.value:'tr2en';
+  return d==='mixed'?['tr2en','en2tr']:[d];
+}
 function wordState(k){
   if(!STATS[k])return 'unseen';
-  const a=cardState(k,'tr2en'), b=cardState(k,'en2tr');
-  if(a==='learning'||b==='learning')return 'learning';
-  if(a==='mastered'&&b==='mastered')return 'mastered';
+  const sts=progDirs().map(function(d){return cardState(k,d);});
+  if(sts.indexOf('learning')>=0)return 'learning';
+  if(sts.every(function(x){return x==='mastered';}))return 'mastered';
   return 'edge';
+}
+function progNum(c,total){
+  const met=total-c.unseen;
+  return '<span class="prog-num" title="'+met+' of '+total+' met · '+c.mastered+' mastered · '
+    +c.learning+' relearning">'+met+'/'+total+'</span>';
 }
 function progBar(c,total){
   let h='<div class="prog-bar">';
@@ -3234,11 +3263,12 @@ function renderProgress(){
     lvHtml+='<div class="prog-row'+(unlocked(n)?'':' locked-row')+'">'
       +'<span class="prog-lab">L'+n+' · '+esc(LEVELS[n-1].name)+(unlocked(n)?'':' 🔒')+'</span>'
       +progBar(c,cards.length)
-      +'<span class="prog-num">'+c.mastered+'/'+cards.length+'</span></div>';
+      +progNum(c,cards.length)+'</div>';
   }
   document.getElementById('prog-levels').innerHTML=lvHtml;
   /* accumulated AND remaining, in one line */
-  let sum=tot.mastered+' of '+VOCAB.length+' words fully mastered · '
+  const dl=progDirs().length>1?'both directions':(progDirs()[0]==='tr2en'?'Türkçe → English':'English → Türkçe');
+  let sum=tot.mastered+' of '+VOCAB.length+' words mastered ('+dl+') · '
     +tot.edge+' in progress · '+tot.learning+' relearning · '+tot.unseen+' still ahead.';
   if(!LV.off&&LV.u<LEVELS.length)
     sum+=' Level '+LV.u+' of '+LEVELS.length+' · '+levelProgressPct(LV.u)+'% toward the next unlock.';
@@ -3251,7 +3281,7 @@ function renderProgress(){
   document.getElementById('prog-drills').innerHTML=
     '<div class="prog-row"><span class="prog-lab">All topics</span>'
     +progBar(dc,DRILLS.length)
-    +'<span class="prog-num">'+dc.mastered+'/'+DRILLS.length+'</span></div>';
+    +progNum(dc,DRILLS.length)+'</div>';
   const st=numStage();
   document.getElementById('prog-numbers').textContent=
     ['Stage 1 of 3: the units 1-9.','Stage 2 of 3: plus sıfır, the tens and yüz.',
