@@ -2069,6 +2069,7 @@ function makeDeck(cfg){
     /* undo must also bring the forced probe back, or an undone probe answer
        degrades the exclusion ladder to a plain presentation */
     if(hadProbe&&undoState)undoState.probe={key:pKey,mode:hadProbe};
+    if(wasCheck&&undoState)undoState.check={ok:!!correct};   /* undo rolls the check tally back too */
     const policy=(opts&&opts.policy)||(correct?'delay':'stay');
     if(res==='retired'){
       /* grade + undo state are committed NOW; flashMs only postpones the
@@ -2112,6 +2113,7 @@ function makeDeck(cfg){
     /* the debrief counters and any forced probe roll back with the grade */
     if(u.g){rs.answered--;if(u.g==='d')rs.wrong--;else rs.right--;}
     if(u.probe)probeNext[u.probe.key]=u.probe.mode;
+    if(u.check){rs.checks--;if(u.check.ok)rs.checksOk--;}
     if(u.removed!==undefined){deck.splice(u.at,0,u.removed);i=u.at;}
     else{i=u.iPrev;}
     setUndo(null);render();
@@ -3161,6 +3163,8 @@ document.addEventListener('click',e=>{
         if(Number.isInteger(lvl)&&lvl>=1&&lvl<=LEVELS.length&&!LV.ov[lvl]
            &&(lvIn.ov[n]==='open'||lvIn.ov[n]==='shut'))LV.ov[lvl]=lvIn.ov[n];
       });
+      /* a restored backup brings back "Practice without levels" too */
+      if(typeof lvIn.off==='boolean'){LV.off=lvIn.off;document.getElementById('lvl-off').checked=LV.off;}
       saveLevels();
     }
     maybeUnlock();          /* restored history may clear level criteria */
